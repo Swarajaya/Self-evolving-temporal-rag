@@ -1,0 +1,17 @@
+[
+  {
+    "question": "What was the architecture of GPT models before 2021?",
+    "answer": "Before 2021, GPT models were primarily transformer-based autoregressive language models trained on static datasets.",
+    "answer_year": 2020
+  },
+  {
+    "question": "How did retrieval augmented generation change after 2022?",
+    "answer": "After 2022, RAG systems began incorporating vector databases, hybrid retrieval, and temporal awareness.",
+    "answer_year": 2023
+  },
+  {
+    "question": "What are recent advances in temporal reasoning for LLMs?",
+    "answer": "Recent advances include time-aware embeddings, decay-based retrieval, and self-updating knowledge stores.",
+    "answer_year": 2024
+  }
+]

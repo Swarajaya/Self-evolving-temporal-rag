@@ -1,0 +1,1790 @@
+Overcoming In-Memory Bottlenecks in
+Graph Foundation Models via Retrieval-Augmented Generation
+Haonan Yuan
+SKLCCSE, School of Computer
+Science and Engineering
+Beihang University
+Beijing, China
+yuanhn@buaa.edu.cn
+Xingcheng Fu
+arXiv:2601.15124v1  [cs.LG]  21 Jan 2026
+Qingyun Sun
+SKLCCSE, School of Computer
+Science and Engineering
+Beihang University
+Beijing, China
+sunqy@buaa.edu.cn
+Jianxin Li∗
+Key Lab of Education Blockchain and
+Intelligent Technology, Ministry of Education
+Guangxi Normal University
+Guilin, Guangxi, China
+fuxc@gxnu.edu.cn
+Jiacheng Tao
+SKLCCSE, School of Computer
+Science and Engineering
+Beihang University
+Beijing, China
+jiachengtao@buaa.edu.cn
+SKLCCSE, School of Computer
+Science and Engineering
+Beihang University
+Beijing, China
+lijx@buaa.edu.cn
+Abstract
+Graph Foundation Models (GFMs) have emerged as a frontier in
+graph learning, which are expected to deliver transferable represen
+tations across diverse tasks. However, GFMs remain constrained
+by in-memory bottlenecks: they attempt to encode knowledge
+into model parameters, which limits semantic capacity, introduces
+heavy lossy compression with conflicts, and entangles graph repre
+sentation with the knowledge in ways that hinder efficient adap
+tation, undermining scalability and interpretability. In this work,
+we propose RAG-GFM, a Retrieval-Augmented Generation aided
+Graph Foundation Model that offloads knowledge from parameters
+and complements parameterized learning. To externalize graph
+knowledge, we build a dual-modal unified retrieval module, where
+a semantic store from prefix-structured text and a structural store
+from centrality-based motif. To preserve heterogeneous informa
+tion, we design a dual-view alignment objective that contrasts both
+modalities to capture bothcontentandrelationalpatterns. Toenable
+efficient downstream adaptation, we perform in-context augmenta
+tion to enrich supporting instances with retrieved texts and motifs
+as contextual evidence. Extensive experiments on five benchmark
+graph datasets demonstrate that RAG-GFM consistently outper
+forms 13 state-of-the-art baselines in both cross-domain node and
+graph classification, achieving superior effectiveness and efficiency.
+CCSConcepts
+• Mathematics of computing → Graph algorithms; • Com
+puting methodologies → Neural networks; Learning latent
+representations; Knowledge representation and reasoning.
+∗Corresponding author.
+This work is licensed under a Creative Commons Attribution-NonCommercial
+NoDerivatives 4.0 International License.
+WWW’26,Dubai, United Arab Emirates
+©2026 Copyright held by the owner/author(s).
+ACMISBN979-8-4007-2307-0/2026/04
+https://doi.org/10.1145/3774904.3792139
+Keywords
+Graph Foundation Models, Retrieval-Augmented Generation, Multi
+domain Graph Pre-training, Graph Prompt Learning
+ACMReference Format:
+Haonan Yuan, Qingyun Sun, Jiacheng Tao, Xingcheng Fu, and Jianxin Li.
+2026. Overcoming In-Memory Bottlenecks in Graph Foundation Models via
+Retrieval-Augmented Generation. In Proceedings of the ACM Web Conference
+2026 (WWW’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New
+York, NY, USA, 12 pages. https://doi.org/10.1145/3774904.3792139
+1 Introduction
+Graphs are powerful structures for describing complex relation
+ships among entities, and have been broadly adopted in domains
+such asmodelingfortheWorldWideWeb[1,50],socialandcitation
+networks [7, 76], retrieval and recommendation systems [62, 65],
+knowledge graphs [63, 79], biological analysis [9, 67], etc. Graph
+Neural Networks (GNNs) [12, 20] have enabled effective represen
+tation learning on graphs, supporting a wide range of tasks, but
+are typically tailored to specific datasets and tasks, limiting cross
+domain generalization. Motivated by large-scale pre-training in
+language and vision, Graph Foundation Models (GFMs) have re
+cently emerged to learn universal graph representations through
+pre-training and downstream adaptation [11, 14, 29, 34, 43, 44, 77],
+aiming to support diverse applications with minimal supervision.
+Despite these advances, existing GFMs face fundamental limita
+tions. Current methods follow the “pretrain-then-finetune” para
+digm overwhelmingly, where knowledge from source domains is ei
+ther fully compressedintoasingleGFM’smodelparameters[74,81],
+or at best expanded through lightweight mixtures-of-experts (MoE)
+that remainlargelyconceptualandofferlittlepractical relief [10, 78].
+While parameter counts may increase marginally, they fall far short
+of matching the vast, orders-of-magnitude greater knowledge vol
+ume inherent in pre-training domains. Graph knowledge is inher
+ently dual-modal, combining node-level semantic texts and higher
+order structural patterns, which leads to inevitable in-memory
+bottlenecks that hinder scalability, robustness, and interpretability.
+WWW’26,April 13–17, 2026, Dubai, United Arab Emirates
+Haonan Yuan, Qingyun Sun, Jiacheng Tao, Xingcheng Fu, and Jianxin Li
+<president_of>
+Challenge I
+Limited Capacity
+<president_of>
+Data:
+TB
+GFM 
+Parameter:
+MB
+Challenge II
+Lossy Compression
+GFM 
+encode
+GFM 
+decode
+Challenge III
+Entangled Storage
+GFM pre-training
+U.S.
+Joe Biden
+update
+U.S.
+Donald Trump
+GFM fine-tuning
+How to solve “in-memory bolenecks” dilemma for GFMs?
+Figure 1: Challenges of the “in-memory bottlenecks”.
+Challenge I: Limited capacity within parameters. Graph
+knowledge spans rich information whose scale far exceeds what
+modelparameterscanstore.Ingraphmodels,increasingparameters
+or depth often causes over-smoothing rather than higher capac
+ity [3, 18]. Consequently, GFMs trained on a single domain quickly
+exhaust their parameter budget when transferred to others with dis
+tinct semantics and motifs, leading to forgetting, poor transfer, and
+limited scalability [41, 82]. This exposes the fundamental limitation
+of parameter-centric storage for graphs.
+Challenge II: Lossy and conflicting compression. Forcing
+heterogeneous graph knowledge into parameters inevitably causes
+lossy and conflicting compression. Identical structural patterns may
+carry opposite semantics across domains, and collapsing them into
+shared embeddings distorts meaning. Moreover, such compression
+is irreversible: once absorbed into weights, knowledge cannot be
+retrieved, verified, or updated without retraining, undermining
+transparency and grounded reasoning.
+Challenge III: Entangled representation and storage. The
+parameter-based storage tightly entangles knowledge with repre
+sentations, hindering efficient adaptation. Fine-tuning simultane
+ously adjusts task-specific features and updates memorized knowl
+edge, making learning inefficient and data-intensive. This entangle
+ment also obscures interpretability, as predictions cannot be traced
+to explicit evidence, reducing reliability in high-stakes applications.
+Ourkeyinsightistomovebeyondparameter-centricstorageby
+externalizing graph knowledge, inspired by Retrieval-Augmented
+Generation (RAG) [22]. Unlike text, graph knowledge is fragmented
+across attributes and structures, making retrieval more challeng
+ing. Existing GFMs compress such evidence into parameters, los
+ing explicit access and updatability. We argue that treating graph
+knowledge as first-class retrievable objects enables external storage,
+aligned pre-training, and scalable, interpretable adaptation.
+In this work, we propose RAG-GFM, a Retrieval-Augmented
+Generation aided Graph Foundation Model. RAG-GFM incorpo
+rates three key components. First, we construct a dual-store uni
+f
+ied retrieval database, consisting of a semantic store from prefix
+structured text embeddings and a structural store from centrality
+based motif encodings, enabling GFMs to query external knowledge
+on demand. Second, we design a dual-view alignment objective that
+contrasts semantic representation with structural subgraphs dur
+ing pre-training, ensuring complementary representation learning
+across modalities. Third, we introduce in-context sample augmen
+tation, where retrieved texts and motifs are appended as contextual
+evidence for few-shot adaptation, enriching support instances with
+explicit external knowledge. Our contributions are:
+• Wepropose RAG-GFM,the first retrieval-augmented graph foun
+dation model that explicitly addresses in-memory bottlenecks.
+• Wedesign a dual-store retrieval module, a dual-view alignment
+objective, and an in-context sample augmentation mechanism,
+providing a unified pipeline for knowledge externalization, ro
+bust pre-training, and efficient adaptation.
+• Extensive experiments on six benchmark graph datasets demon
+strate that RAG-GFM consistently outperforms 13 state-of-the
+art GFM baselines in both cross-domain node and graph classifi
+cation, achieving superior effectiveness and efficiency.
+2 Related Work
+Graph Foundation Models (GFMs). GFMs extend large-scale
+pre-training to graphs via self-supervised learning [2, 4, 30, 47, 68,
+71]. Most assume distributional similarity between pre-training
+and downstream tasks [16, 80], limiting robustness under domain
+shift. Recent work explores cross- or multi-domain learning, LLM
+alignment, domain tokens, and structural guarantees [14, 26, 26, 51
+53, 61, 64, 70, 75, 78, 81], yet GFMs remain parameter-centric and
+struggle with structural and semantic consistency.
+Retrieval-Augmented Generation (RAG). RAG enhances the
+LLMs by retrieving external knowledge to mitigate context limits
+and hallucinations [6]. Using lexical or semantic retrieval with
+queryoptimization andre-ranking [23, 32, 40], RAGachievesstrong
+performance in QA and reasoning [17, 54]. Extensions to graph
+data motivate GraphRAG [13, 19, 33, 39, 49, 56, 66]. While GFM
+RAG[31] uses GFMs to improve RAG, we instead leverage RAG to
+fundamentally enhance GFMs.
+3 Notations and Preliminaries
+Notations. We represent a graph as𝐺 = (V,E), where V denotes
+the set of nodes and E the set of edges. For a graph𝐺𝑖 sampled from
+any of the source domains, let A ∈ {0,1}𝑁𝑖×𝑁𝑖 be the adjacency
+matrix and X ∈ R𝑁𝑖×𝑑𝑖 be the node feature matrix. Here, 𝑁𝑖 = |V𝑖|
+denotes the number of nodes, and 𝑑𝑖 denotes the original input
+feature dimension. Z, W, H are the hidden representations.
+Multi-domainPre-training. Let GS = {𝐺S
+1 ,··· ,𝐺S𝑛} denote a
+collection of source graphs from domains DS, each associated with
+labels YS. We cast pre-training as a self-supervised link prediction
+problem with universal templates [27], ensuring task consistency
+with downstream settings. The learner is defined as ℎ =𝑔(𝑓𝚯(·)),
+where the encoder 𝑓 : R𝑑𝑖 ↦→ R𝑑 produces node embeddings and
+the discriminator 𝑔: R𝑑 × R𝑑 ↦→ R2 predicts link existence. Once
+the pre-training converges, parameter 𝚯★ is frozen as the backbone.
+Few-shot Fine-tuning. We consider graphs GT from target do
+mains DT (seen or unseen). Under𝑚-shot setting (𝑚 ≪ 𝑛
+𝑖=1 𝑁𝑖),
+only 𝑚 labeled samples YT are available. Fine-tuning applies the
+pre-trained ℎ =𝑔(𝑓★
+𝚯
+(·)) augmented with learnable prompts P𝛀,
+where 𝛀 denotes tunable parameters. Both node and graph clas
+sification (via node-centered ego-graphs) are reformulated as link
+prediction, maintaining homogeneity with pre-training.
+OvercomingIn-MemoryBottlenecksinGraphFoundationModelsviaRetrieval-AugmentedGeneration WWW’26,April13–17,2026,Dubai,UnitedArabEmirates
+(2) Pretrain: Cross-View Alignment
+Citation
+(1)Unified Retrieval Database
+…
+E-Commerce Web Link
+(3)Fine-tune: In-Context Q&A
+Graph Learner 
+(Graph Neural Networks)
+NanoVectorDB
+Semantic DB Structural DB
+<Dataset> 
+<Node ID>
+<Label>
+<Description>
+<Node Text>
+Walk-Spectrum Encoding
+1
+1
+1
+1
+3
+4
+2
+2
+2 3
+1
+1
+1
+1
+3
+4
+2
+2
+2 3
+1
+1
+1
+1
+3
+4
+2
+2
+2 3
+Semantic View Structural View
+1 3 2
+1 3 2
+1 3 2
+🔥 Pretrained Domain Tokens:
+Raw Text Raw Text Raw Text
+“a graph neural 
+network for node 
+classification…”
+“wireless Bluetooth 
+headphones with
+noise cancellation…”
+“official homepage 
+for AI tutorials 
+and resources …”
+World-wide News Event
+Query #1
+“…earthquake struck 
+Turkey causing severe 
+damage and casualties…”
+1
+2
+3
+4
+Answer #1
+“…real-time earthquake 
+monitoring using graph
+based warning systems…”
+1
+2
+3
+5
+Query #2
+“…leaders gatherin
+Dubai for Global Climate 
+Summit to discuss…”
+Answer #2
+“…live coverage of the 
+COP28 summit in Dubai 
+with daily policy updates…”
+1
+2
+3 4
+< 
+Citation 
+> <Web Link>
+1
+2
+4
+5
+|| [ ] ⊙ ⊙ Mixed Token Prompts In-Context Augmentation
+🔥
+❄
+…
+𝐺S
+1 𝐺S
+2 𝐺S𝑛 𝐺T
+1 𝐺T
+2 𝐺T
+3 𝐺T𝑚
+P𝛀
+Htext Hstruct
+ℎ=𝑔(𝑓𝚯(·))
+(1) (2) (3)
+Figure2:TheframeworkofRAG-GFM.Theframeworkincludesthreestages:(1)UnifiedSemantic-StructuralBi-ModalRetrieval
+Databaseforexternalizinggraphknowledge,(2)Cross-ViewKnowledgeAlignmentforpre-trainingtransferablepriors,and(3)
+In-ContextRetrievalAugmentationforfew-shotadaptationviadomain-gatedlightweightgraphprompts.
+4 Method
+WeillustratetheframeworkofRAG-GFMinFigure2.
+4.1 UnifiedSemantic-StructuralBi-Modal
+RetrievalDatabase
+Atthecoreofourframeworkliesaunifiedretrievaldatabasethat
+externalizesknowledgeintotwocomplementarymodalities:ase
+manticstorethatorganizesenrichednodetextsasretrievabledoc
+uments,andastructuralstorethatcapturesmotif-levelpatterns.
+Formally,wedenotethebi-modaldatabase∗asD={Dtext,Dstruct}.
+Givenqueryqandscoringfunction𝑠(·,·),theretrievaloperatoris:
+Retrieve(D,q,𝑘)=argTop-𝑘(𝑢,z𝑢)∈D[𝑠(q,z𝑢)], (1)
+witheachentry(𝑢,z𝑢)denotingadatabaserecordidentifiedby𝑢
+anddescribedbyz𝑢.Disqueriedinbothpre-trainingandfine
+tuning,whichallowsRAG-GFMtogroundpredictionsinexplicit
+semanticandstructuralevidenceratherthanobscureparameters.
+4.1.1 SemanticStore.Unlikerawnodefeaturesreducedtonu
+mericalvectors,mostofthegraphsaretext-attributed,withnodes
+fromsourcessuchasabstracts,productdescriptions,orprofiles.
+Werecovereachnode’srawtextt𝑣bytracingitbacktoitsorig
+inalcorpus(e.g.,metadataincitations)[24,25],andtreat itasa
+first-classsignal.Thesemanticpipelinebranchesintotwotracks:
+Ontherepresentationtrack,weaddressthedimension-wise
+mismatchofrawfeaturesacrossdomainsusingPCA[38].Foreach
+graph𝐺𝑖withfeaturematrixX𝑖 ∈R𝑁𝑖×𝑑𝑖,weapply:
+XS
+𝑖 =PCA𝑑0
+(XS
+𝑖 )∈R𝑁𝑖×𝑑0. (2)
+Inparallel,therawtext𝑡𝑣 isencodedbyaBERTintoasemanticvec
+torb𝑣∈R𝑑0.TheupdatednodefeatureisxS𝑣 = xS𝑣 ∥b𝑣 ∈R2𝑑0,
+combiningdimension-alignedattributeswithenrichedsemantics.
+Thus,welearnthegraphembeddingswiththetext-wiseencoder:
+ZS
+𝑖 =𝑓𝚯𝑡
+XS
+𝑖 ,AS
+𝑖 ∈R𝑁𝑖×𝑑. (3)
+∗ImplementedinNanoVectorDB[69],alightweightbutefficientdatabasethatprovides
+scalablestorageandtop-𝑘retrievaloverdensequeries.
+Ontheretrievaltrack,webuildDtextasatextualvectordata
+base.Foreachnodeanditscorrespondingrawtext,tostandardize
+heterogeneoussourcesandmakeretrievalcontrollableandinter
+pretable,weaugmenteachdocumentwithastructuredprefix:
+PrefixSchema Example
+Dataset:<dataset_name>
+NodeID:<node_id>
+Label:<node_label>
+Description:<description>
+NodeText:<node_text>
+Cora
+#123
+NeuralNetworks
+Papersaboutneuralnetworks.
+Thispaper introduces theLSTM, a
+LongShort-TermMemorymodel.
+Theprefixeddocumentt𝑣issegmentednotbynaivelengthrulesbut
+intograph-awarechunks{c𝑣1
+,··· ,c𝑣𝑘
+}alignedwithdescriptive
+fieldsandclass-levelinformationforfine-grainedretrieval.Inthis
+way,ityieldscoherentchunksthatremainintrinsicallyalignedwith
+thestructureratherthanarbitraryspans.Eachchunkisembedded
+withBERTintozS𝑣𝑗
+∈R768.Weinsert(𝑣,zS𝑣𝑗
+,meta𝑣𝑗
+)intotheDtext,
+wheremeta𝑣𝑗
+carriesthestructuredfieldsfromtheprefix.Formally,
+Dtext= 𝑣,zS
+𝑣𝑗
+,meta𝑣𝑗
+|𝑣∈{V𝑖}𝑛
+𝑖=1, 𝑗∈[1,𝑘] . (4)
+Theprefixservesasa“retrievalhook”forthemetadatafilteringand
+cross-domainalignment,whilethe768-dimensionalembeddings
+preservesemanticcapacityforin-contextaugmentation.
+4.1.2 StructuralStore.Enumeratingmotifsiscomputationally
+intractable(NP-hard),andstoringarbitrarysubgraphsintroduces
+noise.Inspiredby[5,45],weproposetheWalk-SpectrumEncoding
+(WSE),whichranksnodesbyawalk-basedimportanceandencodes
+theirlocalneighborhoodswithamulti-orderwalksignature.
+Definition1(Walk-SpectrumEncoding). Foranode𝑣∈V,
+theWalk-SpectrumEncoding(WSE)oforder𝐾isdefinedas:
+CWSE
+𝛼 (𝑣)= 𝛼A𝑣𝑣, 𝛼2A2
+𝑣𝑣, 𝛼3A3
+𝑣𝑣,··· ,𝛼𝐾A𝐾
+𝑣𝑣 , (5)
+where𝛼∈(0,1)isadampedvariant,andA𝑘 𝑣𝑣 countsthenumber
+ofclosedwalksoflength𝑘startingandendingatnode𝑣.
+WWW’26,April13–17,2026,Dubai,UnitedArabEmirates HaonanYuan,QingyunSun,JiachengTao,XingchengFu,andJianxinLi
+WSEsummarizesanode’sparticipationinclosedwalksofvarying
+lengths, therebyencodingstructuralpatternsbeyondanyfixed
+radiusneighbors.Thismotivatesthefollowingresultonitsability
+toseparategraphsthatlocalmethods[45]cannotdistinguish:
+Proposition1(StructuralSeparabilityofWSE). Thereexist
+pairsofnon-isomorphicgraphs𝐺1,𝐺2andnodes𝑣∈𝐺1,𝑢∈𝐺2
+suchthatforanyfixedradius𝑟,the𝑟-hopneighborsN𝑟(𝑣)and
+N𝑟(𝑢)areisomorphic,yettheWalk-SpectrumEncodingssatisfy:
+CWSE
+𝛼 (𝑣)≠CWSE
+𝛼 (𝑢). (6)
+ProofsinAppendixB.1.WhileWSEprovidesrichstructuralsigna
+tures,computingandstoringsubgraphsforallnodesisinfeasible
+atscale.Toaddressthis,wederiveananchorscoringfunction:
+𝑟𝑣(𝛼,𝐾)=
+∑︁𝐾
+𝑘=1
+𝛼𝑘A𝑘
+𝑣𝑣, foreach𝑣∈{V𝑖}𝑛
+𝑖=1 (7)
+Intuitively,𝑟𝑣highlightsnodesmostrecurrentlyinvolvedinstruc
+turalmotifs.Rankingnodesby𝑟𝑣allowsustoselectacompactyet
+informativepoolofanchorsformotifstorageandretrieval.
+Wethenselectthetop-𝑀nodesineachgraphintoVS
+anchor ,and
+extractitsℎ-hopego-subgraph𝐺S
+𝑣(ℎ) foreachnode𝑣.Toreduce
+redundancy,overlappingego-subgraphsareprunedvianodeset
+equivalence.Theresultingstructuralstoreisdefinedas:
+Dstruct= 𝑣,𝐺S
+𝑣(ℎ) ,CWSE
+𝛼 (𝑣),meta𝑣 |𝑣∈VS
+anchor , (8)
+wheremeta𝑣 includesmetadatalikehopradius,anchorscore,etc.
+Atthispoint,wehaveestablishedtheunifiedsemantic-structural
+bi-modalretrievaldatabaseD,whichwillserveasthefoundation
+forsubsequentpre-trainingandfine-tuning.
+4.2 Cross-ViewKnowledgeAlignmentfor
+Multi-domainPre-training
+WiththeunifieddatabaseD={Dtext,Dstruct}inplace, thenext
+stepistopre-traintheencoder 𝑓𝚯(·) thatcouplessemanticand
+structuralinformationinaprincipledway.Thegoalisnottocol
+lapsethemintoasinglerepresentationbuttoensurethatbothcarry
+complementaryandtransferablesignalsacrossdomains.
+4.2.1 NodeViews. Foreach𝐺S
+𝑖 ,webuildtwonode-levelviews.
+ThesemanticviewisgivenbytheenrichednodeembeddingsZS
+𝑖 in
+Eq.(3),whichcombinerawattributesandtext-derivedfeatures.The
+structuralviewisconstructedfromthewalk-spectrumencoding:
+WS
+𝑖 = CWSE
+𝛼 (𝑣) 𝑣∈VS
+𝑖
+, (9)
+whereeachitemrecordsclosed-walksignaturesuptoorder𝐾,cap
+turingrecurringmotifpatternsandhigher-orderrelationalsignals.
+DomainTokens.Toincorporatedomain-levelpriors,weintro
+ducealearnabletoken𝝉𝐷𝑖
+∈R𝑑𝝉 foreachsourcedomain𝐷S
+𝑖 ,which
+isconcatenatedtoeverynoderepresentationbeforeencoding:
+ZS
+𝑖 = ZS
+𝑖 1·𝝉⊤
+𝐷𝑖
+, WS
+𝑖 =WS
+𝑖 1·𝝉⊤
+𝐷𝑖
+, (10)
+where1denotesabroadcastvectorensuringnodeswithinadomain
+sharethistoken.Duringoptimization,𝝉𝐷𝑖
+accumulatesdomainpri
+orsthatarenotcapturedbyindividualnodes,suchasglobalseman
+ticsincitationgraphsorbiochemicalmotifsinprotein-proteinnet
+works.Tokensinitializelightweightgraphpromptsatfine-tuning,
+enablingadaptationwithoutrevisitingthefullpre-trainingcorpus.
+4.2.2 Cross-ViewInformationBottleneck.Ourpre-training
+isentirelyself-supervised: thekeyideaistoalignsemanticand
+structuralviewsofthesamenodewithoutrelyingonlabels,while
+simultaneouslypreventingcollapsebyencouragingeachviewto
+preservemodality-specificinformation.Weapplytwoencoders
+overthesametopologybutdifferentfeatures:
+Htext
+𝑖 =𝑓𝚯𝑡
+ZS
+𝑖 ,AS
+𝑖 , Hstruct
+𝑖 =𝑓𝚯𝑠
+WS
+𝑖 ,AS
+𝑖 , (11)
+whichyieldssemanticembeddingshtext
+𝑖,𝑣 andstructuralembeddings
+hstruct
+𝑖,𝑣 foreachnode𝑣.Concretely,weintroducetheself-supervised
+informationbottleneck[58]bymaximizingthemutual informa
+tionbetweensemanticandstructuralembeddings,andapplying
+compressionregularizerstodiscardredundantsignals:
+L(𝑖,𝑣)
+align=−𝐼 htext
+𝑖,𝑣 ;hstruct
+𝑖,𝑣
+relevance
++𝛽 𝐼 htext
+𝑖,𝑣 ;zS
+𝑖,𝑣 +𝐼 hstruct
+𝑖,𝑣 ;wS
+𝑖,𝑣
+compression
+, (12)
+where𝐼(·;·)denotesthemutualinformation,whichisintractable
+overunknownlatentdistributionsofvariables,and𝛽isthetrade
+offhyper-parameter.Weadoptacontrastiveapproximationthat
+yieldsavariationalboundfortractablecomputation[21,48,57,58]:
+Proposition2(Cross-ViewMutualInformationBounds).
+TherelevancetermadmitstheInfoNCElower-boundestimator:
+𝐼 htext
+𝑖,𝑣 ;hstruct
+𝑖,𝑣 ⩾ 1
+|B|
+∑︁
+𝑣∈B
+log
+exp𝜎𝑔𝑡(htext
+𝑖,𝑣 ),𝑔𝑠(hstruct
+𝑖,𝑣 )/𝜏
+𝑢∈B
+exp𝜎𝑔𝑡(htext
+𝑖,𝑣 ),𝑔𝑠(hstruct
+𝑖,𝑢 )/𝜏 ,(13)
+where𝑔𝑡,𝑔𝑠areprojections,𝜎(·)issimilarity,𝜏isatemperature,
+positivesareformedbythesamenodeacrosstheviews(𝑣,𝑣)
+inabatchB,andnegativesbymismatchednodes(𝑣,𝑢),𝑢≠𝑣.
+................................................ ..........
+Thecompressiontermcanbeupper-boundedviaKL-divergence:
+𝐼 h·
+𝑖,𝑣;xS
+𝑖,𝑣⩽E𝑝(h·
+𝑖,𝑣 ,xS
+𝑖,𝑣 ) log𝑞𝜙 h·
+𝑖,𝑣|xS
+𝑖,𝑣 −E𝑝(h·
+𝑖,𝑣 ) log𝑝h·
+𝑖,𝑣 ,(14)
+where𝑣 issampledfromB,xdenoteszorw,and𝑞𝜙(·|·) isa
+variationalapproximationofthetrueconditionaldistribution.
+Proposition2providestractableself-supervisedestimatorsforthe
+otherwiseintractablemutualinformationterms,withlowerbounds
+appliedtocross-viewalignmentandupperboundsappliedtoview
+specificcompression.WeprovidesketchproofsinAppendixB.2.
+4.2.3 Pre-trainingObjective.Bringingtheabovecomponents
+together,theoverallpre-trainingobjectiveisdefinedas:
+Lpretrain(𝚯𝑡,𝚯𝑠)=
+∑︁
+𝐷S
+𝑖
+1
+VS
+𝑖
+∑︁
+𝑣∈VS
+𝑖
+L(𝑖,𝑣)
+align ·𝛾
+∑︁
+𝐷S
+𝑖
+𝝉𝐷𝑖
+2
+2 , (15)
+wherethefirsttermaggregatesthecross-viewalignmentlossacross
+sourcedomains,andthesecondtermregularizesdomaintokensto
+preventoverfitting.𝛾actsastheirtrade-offhyper-parameter.
+Inpractice,mini-batchesareconstructedbymixingnodesfrom
+differentdomains,andthecorrespondingdomaintokensareup
+datedjointlywithsemanticandstructuralencoders.Thissetup
+enforcescross-domainconsistencyduringpre-trainingwhilepre
+servingdomain-specificpriorsfordownstreamadaptation.𝚯𝑡 and
+𝚯𝑠arefrozononcepre-trainingconverges.Weillustratethepre
+trainingpipelineinAlgorithm1withitscomplexityanalysis.
+Overcoming In-Memory Bottlenecks in Graph Foundation Models via Retrieval-Augmented Generation
+WWW’26,April 13–17, 2026, Dubai, United Arab Emirates
+4.3 In-Context Retrieval Augmentation for
+Few-Shot Fine-Tuning
+Weproceed to fine-tune pre-trained model under meta-learning
+settings (𝑚-shot), which is more challenging in real-world scenarios.
+4.3.1 Domain-Gated Fusion. To ensure dimension-consistency
+with pre-training, each support sample is processed by the same
+representation track (Section 4.1.1, Eq. (2) and Eq. (3)) into XT.
+Before retrieval, we estimate domain affinities that will route
+external evidence. For each target node𝑣𝑖 or graph𝐺T
+𝑖 , we compute
+soft gating weights over source domains via domain tokens:
+𝜋𝑖,𝑘 = exp 𝜎(ZT
+𝑖 ,𝝉𝐷𝑘
+)
+𝑗 exp 𝜎(ZT
+𝑖 ,𝝉𝐷𝑗
+) , ZT
+𝑖 = 𝑓★
+𝚯𝑡 
+XT
+𝑖 ,AT
+𝑖 ,
+(16)
+where ZT
+𝑖 is the pre-trained encoder output on XT. These {𝜋𝑖,𝑘}𝑛
+𝑘=1
+act as domain-aware gates reused by the later augmentations.
+4.3.2 Query and Retrieval. For clarity, we present query and
+retrieval in node-level settings. The extension to graph-level tasks
+follows directly by treating each graph as a single instance.
+Semantic Retrieval. For each few-shot target node 𝑣 and its
+one-hopneighbors, weformatextualquery qtext
+𝑣
+fromtherawtext
+and submit it to Dtext, restricting search to pre-training domains to
+avoid leakage. The database returns top-𝑘 textual answers {zS𝑢},
+which are aggregated through softmax-weighted fusion:
+ΔzT
+𝑣
+text = 
+∑︁
+𝑢∈Top-𝑘(𝑣)
+𝑤𝑣𝑢 ·zS
+𝑢, 𝑤𝑣𝑢 = exp 𝜎(qtext
+𝑣 ,zS𝑢)
+𝑢′ exp 𝜎(qtext
+𝑣 ,zS
+𝑢′) , (17)
+where zT𝑣 is in-context augmented with hyper-parameter 𝜆text:
+zT′
+𝑣 =zT
+𝑣 +𝜆text · ΔzT
+𝑣
+text .
+(18)
+Structural Retrieval. For the same node 𝑣 and its neighbors,
+we extract the ℎ-hop subgraph, encode it with WSE as the struc
+tural query, and submit qstruct
+𝑣
+to Dstruct. From each source do
+main 𝐷S
+𝑖 , we retrieve the most structurally similar motif 𝐺S
+𝑣(ℎ),𝑖 =
+XT
+𝑣(ℎ),𝑖 , AT
+𝑣(ℎ),𝑖 as strcutural answer. We then fuse cross-domain
+answers using domain gates {𝜋𝑣,𝑘} with hyper-parameter 𝜆struct:
+zT′′
+𝑣
+=zT′
+𝑣 +𝜆struct · ΔzT
+𝑣
+struct ,
+ΔzT
+𝑣
+struct = 
+∑︁
+𝐷S
+𝑖 
+ 
+ 𝑣,𝑘 𝑓★
+𝚯𝑠
+XT
+𝑣(ℎ),𝑖 , AT
+𝑣(ℎ),𝑖 .
+(19)
+(20)
+4.3.3 Prompted Few-shot Adaptation. Given𝑚 retrieved and
+augmented support samples {(hT
+𝑖 ,y𝑖)}, to enable efficient adapta
+tion without updating the frozen 𝚯𝑡 and 𝚯𝑠, we initialize learnable
+graph prompts P𝛀 by the routed domain priors:
+hT
+𝑖 = zT′′
+𝑖
+∥P𝛀 , P𝛀 ←
+∑
+︁𝑛
+𝑘=1 
+ 
+ 𝑖,𝑘𝝉𝐷𝑘
+,
+(21)
+where hT
+𝑖 denotes the 𝑖-th target node or graph embedding. The
+f
+ine-tuning objective is transformed into determining the similarity
+between the query sample and the class prototype embedding:
+∑
+︁
+Lfine-tune(P𝛀) = −
+{(hT
+𝑖 ,y𝑖 )}
+
+
+
+
+
+
+
+
+log
+exp 𝑔(hT
+𝑖 ,hTy𝑖
+)/𝜏
+y𝑗 ∈{YT} exp 𝑔(hT
+𝑖 ,hTy𝑗
+)/𝜏
+
+
+
+
+, (22)
+where hTy𝑖 
+is the class prototype for samples in class y𝑖. We analyse
+the fine-tuning pipeline in Algorithm 2 with complexity analysis.
+4.4 Algorithms and Complexity
+Shown in Appendix A, RAG-GFM consists of two stages. In pre
+training, dual-view encoding and self-supervised alignment dom
+inate the cost, yielding O(𝐿(𝐸B + |B|)𝑑 + |B|2𝑑) per iteration,
+where 𝐸B is the edge count in batch B. In fine-tuning, semantic re
+trieval and structural motif retrieval are combined via domain-gated
+fusion and prompt-based classification, giving O(𝑚[log𝑀text +
+𝑛log𝑀struct + (𝑘 + 𝑛 +𝐶)𝑑]) per iteration, with 𝑀text and 𝑀struct
+the database sizes and𝐶 the class number. Retrieval adds only loga
+rithmic overhead, while adaptation updates prompts instead of full
+parameters, ensuring much lower cost than end-to-end fine-tuning.
+Overall, the complexity remains comparable to state-of-the-art
+GFMs while achieving superior efficiency in few-shot adaptation.
+5 Experiment
+Weevaluate RAG-GFM†, focusing on the these research questions:
+• RQ1: Howeffective on cross-dataset or cross-domain few-shot
+node and graph classification? (▷ Section 5.2)
+• RQ2: Which module contributes most? (▷ Section 5.3)
+• RQ3: CanLLMachieve zero-shot reasoning? (▷ Section 5.4)
+• RQ4: Howefficient in time and memory? (▷ Section 5.5)
+• RQ5: Howreliable and interpretable is RAG? (▷ Section 5.6)
+• RQ6:Howsensitive to hyper-parameter changes? (▷ Section 5.7)
+5.1 Experimental Settings
+5.1.1 Datasets. To emphasize the pre-training capability across
+heterogeneous domains, we adopt five benchmark text-attributed
+graph datasets spanning three distinct domains. This design con
+trasts with conventional settings that often regard a single dataset
+as an independent domain, offering a more challenging evaluation.
+• Citation Domain: Cora [35], CiteSeer [8], PubMed [42].
+• E-Commerce Domain: Ogbn-Products [15] from a large-scale
+product co-purchase network, which includes sub-categories.
+• WebLinkDomain:Wiki-CS[36],ahyperlinkwebpagenetwork
+constructed from a subset of Wikipedia.
+5.1.2 Baselines. We compare RAG-GFM with 13 state-of-the-art
+baselines from four primary categories.
+• Vanilla GNNs: GCN [20] and GAT [59] without pre-training.
+• GraphPre-training: DGI [60], InfoGraph [46], GraphCL [72].
+• Text-freeGFMs:GCOPE[81],MDGPT[75],SAMGPT[74],andMDGFM
+[64], which are evaluated on text-free graphs.
+• Text-attributed GFMs: OFA [25], ZeroG [24], GraphCLIP [83],
+andUniGraph[14],whichareevaluatedontext-attributedgraphs.
+5.1.3 Pre-trainingandFine-tuningSettings. Weevaluatenode
+and graph-level classification under the 𝑚-shot setting, where 𝑚
+labeled samples per class are randomly selected. For graph task, ego
+graphs centered on target nodes are extracted and labeled by central
+nodes [28, 73, 75]. To assess generalization, we adopt two leave-out
+strategies, both referred to as LODO: (1) Leave-One-Dataset-Out,
+holding out one dataset as target; and (2) Leave-One-Domain-Out,
+excluding an entire domain during pre-training. These variants
+capture transferability across unseen datasets and unseen domains.
+Results are reported by mean values with standard deviation.
+† https://github.com/RingBDStack/RAG-GFM.
+WWW’26,April13–17,2026,Dubai,UnitedArabEmirates HaonanYuan,QingyunSun,JiachengTao,XingchengFu,andJianxinLi
+Table1:Few-shotclassificationresultsundertheLODOsetting.Wereportmeanaccuracy(%)withstandarddeviation.“LODO
+(dataset)”denotestrainingonalldatasetsexceptthetarget,irrespectiveofdomain.“LODO(domain)”denotestrainingwithall
+datasetsexcludingthosebelongingtothetargetdomain.Bestresultsarepresentedinboldandtherunner-upsareunderlined.
+Setting LODO(dataset) LODO(domain)
+TargetDataset Cora CiteSeer PubMed Ogbn-Products Wiki-CS
+𝒎-shot 1 5 1 5 1 5 1 5 1 5
+Method NodeClassification
+GCN (▷ICLR’17) 28.4±4.6 50.2±4.9 29.3±3.4 45.9±5.4 40.3±6.9 50.7±7.5 44.7±4.3 48.1±3.4 37.2±5.1 48.1±4.9
+GAT (▷ICLR’18) 29.7±5.2 49.0±7.9 29.3±3.5 46.1±5.1 40.5±4.0 52.2±6.3 44.6±4.0 48.1±4.5 37.9±4.5 48.6±4.5
+DGI (▷ICLR’19) 30.8±3.9 49.9±6.6 31.4±4.1 46.5±7.1 40.0±5.9 53.6±7.1 46.0±5.4 50.1±4.2 38.1±5.1 49.2±4.4
+GraphCL (▷NeurIPS’20) 33.6±5.8 53.2±5.4 28.2±3.1 48.8±7.7 39.0±8.7 54.7±4.4 46.1±5.0 50.5±4.6 40.0±4.0 50.1±5.2
+GCOPE (▷KDD’24) 36.3±3.9 55.6±6.4 40.4±4.6 56.9±5.8 44.8±4.7 53.6±8.6 47.7±4.9 51.4±3.3 45.8±5.5 53.5±4.7
+MDGPT (▷arXiv’24) 42.6±6.8 62.7±6.0 37.9±7.2 55.9±3.3 51.0±9.0 58.7±6.2 49.1±6.0 56.6±2.7 45.0±4.8 54.1±5.2
+SAMGPT (▷WWW’25) 46.8±6.5 64.6±6.7 38.7±6.4 56.4±4.7 51.9±9.5 59.1±6.0 49.8±4.4 56.2±3.3 44.4±5.5 54.4±5.8
+MDGFM (▷ICML’25) 47.4±6.3 66.0±6.5 36.3±6.2 55.8±4.0 50.2±8.8 58.4±6.4 48.5±4.7 54.7±4.9 43.4±5.8 53.9±4.4
+OFA (▷ICLR’24) 45.9±6.3 67.7±2.9 38.0±7.6 52.8±6.4 46.3±6.0 56.0±5.9 49.1±5.7 55.3±4.2 42.8±4.6 54.3±4.0
+ZeroG (▷KDD’24) 51.8±5.6 71.4±1.7 39.7±5.9 54.6±2.0 53.1±3.5 63.0±3.5 53.2±2.9 59.9±3.1 46.1±3.4 59.0±2.0
+GraphCLIP (▷WWW’25) 53.9±5.3 73.1±2.9 40.6±3.4 55.2±1.2 56.8±1.9 65.2±2.8 53.4±6.1 62.6±4.3 45.5±2.1 59.9±2.8
+UniGraph (▷KDD’25) 56.1±6.3 74.8±1.9 40.5±3.1 56.3±2.2 57.0±3.1 66.8±2.4 53.8±3.4 61.0±3.5 45.1±3.6 58.4±3.1
+RAG-GFM(ours) 58.4±6.0 76.1±0.7 41.5±3.0 57.7±1.8 59.2±2.7 68.7±1.8 55.4±7.6 64.2±4.4 47.8±3.8 60.9±2.5
+Method GraphClassification
+GCN (▷ICLR’17) 40.1±4.8 52.9±4.1 29.5±5.7 43.9±5.9 45.3±7.3 55.4±5.3 47.6±3.2 52.6±5.3 38.9±4.1 41.5±6.4
+GAT (▷ICLR’18) 36.0±5.1 49.6±5.1 26.0±7.8 45.3±7.3 41.0±5.8 54.5±7.3 49.2±5.6 52.9±5.5 38.3±4.6 41.1±3.5
+InfoGraph (▷ICLR’20) 42.2±5.2 54.7±4.9 30.2±4.1 47.2±5.2 49.1±5.4 59.7±7.1 50.7±4.3 53.8±5.1 40.4±4.3 42.4±5.0
+GraphCL (▷NeurIPS’20) 39.6±5.8 55.2±5.9 32.6±6.5 46.4±3.8 47.7±7.0 60.0±5.4 51.7±5.9 53.0±5.2 40.8±4.6 42.5±4.3
+GCOPE (▷KDD’24) 55.9±7.4 63.9±4.8 41.0±9.0 58.2±5.8 54.4±8.6 66.4±3.7 55.8±4.3 57.7±4.8 42.2±5.8 49.8±3.5
+MDGPT (▷arXiv’24) 52.8±6.7 65.1±4.2 41.0±9.7 59.3±6.0 55.5±8.3 67.6±4.6 54.5±4.8 60.5±3.4 43.2±6.2 48.9±4.2
+SAMGPT (▷WWW’25) 53.3±4.3 69.3±3.4 42.4±7.3 62.4±5.7 57.7±6.3 68.0±4.6 54.4±3.2 60.8±4.8 43.5±5.6 48.3±5.7
+MDGFM (▷ICML’25) 55.5±5.4 69.4±2.1 43.4±6.4 60.8±5.1 56.0±5.1 67.1±5.1 54.7±2.1 59.8±5.3 41.8±6.7 46.4±3.2
+OFA (▷ICLR’24) 58.0±3.7 65.1±3.9 45.4±6.6 60.0±6.6 59.7±4.3 67.2±3.4 56.0±3.9 60.1±3.5 42.4±5.8 48.1±2.2
+ZeroG (▷KDD’24) 65.1±2.2 74.2±1.6 50.3±5.7 64.0±5.1 61.4±4.0 70.2±1.3 58.5±4.0 66.2±3.9 46.1±5.9 57.8±3.6
+GraphCLIP (▷WWW’25) 65.9±3.7 75.1±2.2 50.4±4.0 63.0±3.3 60.7±3.8 71.3±2.2 58.6±2.2 65.7±2.2 46.0±3.3 58.8±4.4
+UniGraph (▷KDD’25) 66.5±2.5 76.5±1.0 50.9±4.4 64.0±2.4 61.5±2.6 71.4±2.3 58.1±4.0 66.0±3.8 47.0±2.5 58.9±2.2
+RAG-GFM(ours) 68.7±1.5 78.4±0.6 52.2±6.1 65.5±2.2 62.4±2.1 71.5±1.9 60.2±4.2 68.0±3.1 48.1±1.1 62.0±4.3
+5.2 RQ1:TransferacrossDomainsandTasks
+Table1reportstheresultsoffew-shotnodeandgraphclassification
+underbothLODOsettings.Resultsrevealthat:
+(1)Overallsuperiority.TheproposedRAG-GFMconsistently
+outperformsallbaselinesovereachtargetgraph.Theadvantage
+ismostevidentinthechallengingLODO(domain)case,where
+itraisesthe5-shotgraphclassificationaccuracyonWiki-CSby
+over5.3%comparedwithUniGraph,relatively.Baselinesgenerally
+struggleastheycompressknowledgeentirelyintoparametersor
+relyonlyontexts, limitinggeneralizationtounseendomains.
+(2)Retrievalenhancestransfer.InLODO(dataset)setting,
+RAG-GFMconsistentlyoutperformsparameter-onlyGFMs,with
+theaveragerelativegainsof~3.0%.Whilebaselinescanstillleverage
+shareddomainpriors,theirparameter-centricrepresentationsfail
+tocapturesufficientdiversityacrossdatasets.Bycontrast,retrieval
+fromtheunifieddatabaseintroducescomplementaryevidence:se
+manticqueriessupplytextualsignals,andstructuralqueriesprovide
+transferablemotifs,enablingadaptationwithminimalsupervision.
+(3)Cross-viewalignmentstrengthenscross-domainro
+bustness.InthestricterLODO(domain)setting,wheretheentire
+targetdomainisunseen,theperformancegapwidensfurtherwith
+anaveragerelativeimprovementof~4%.Baselinesrelyingontext
+onlyordomain-specificfeaturesdegradesharply,sincetheycannot
+bridgemodalityanddomaingaps.Incontrast,cross-viewalignment
+inRAG-GFMenforcesconsistencybetweensemanticandstructural
+views,reducingoverfittingtopre-trainingdomainsandensuring
+thatretrievedknowledgeremainsuseful.
+(4)Domain-gatedpromptingensuresuniversality.Consis
+tentgainsacrosstasks(onaverage4.5%higheraccuracyinthe
+nodetaskand3.8%inthegraphtask,relatively)demonstratethat
+theframeworkisnottailoredtoaspecificscenario.Baselinesoften
+overfittoonetaskformulation:modelstunedfornodeclassifica
+tiontransferlesseffectivelytographclassification.Byintroducing
+domain-gatedprompts,ourRAG-GFMadaptsflexiblytobothgran
+ularities,whichisparticularlyadvantageousinfew-shotscenarios
+wherelabeleddataisextremelyscarce.
+OvercomingIn-MemoryBottlenecksinGraphFoundationModelsviaRetrieval-AugmentedGeneration WWW’26,April13–17,2026,Dubai,UnitedArabEmirates
+Node Classification Graph Classification 30
+40
+50
+60
+70
+Accuracy (%)
+59.2
+69.1
+53.6
+65.0
+51.1
+62.3
+57.5
+67.2
+LODO (dataset, Cora)
+Node Classification Graph Classification 30
+35
+40
+45
+50
+Accuracy (%)
+47.1 48.2
+42.8
+46.3
+39.2 40.3
+45.6 45.9
+LODO (domain, Wiki-CS)
+ (-) w/o Align
+(-) w/o TextQA 
+(-) w/o StructQA
+RAG-GFM
+Figure3:AblationStudy.
+45 50 55 60 65
+OFA 
+ZeroG 
+GraphCLIP 
+UniGraph
+LODO (dataset, PubMed)
+45 50 60 65
+OFA 
+ZeroG 
+GraphCLIP 
+UniGraph
+LODO (domain, Ogbn-Prducts)
+zero-shot
+zero-shot with LLM (Qwen2-7B-Insturct)
+49.6
+52.5
+55.7
+57.5
+62.1
+63.3
+54.3
+52.2
+58.6
+56.6
+50.6
+51.2
+54.3
+55.2
+53.8
+57.1
+59.9 
+59.2
+61.7
+58.5
+55
+RAG-GFM
+RAG-GFM
+Figure4:Zero-shotReasoning.
+20
+30
+40
+50
+Accuracy (%)
+Time Efficiency (episodes)
+5 10 15 20 25
+20
+30
+40
+50
+Accuracy (%)
+GCOPE 
+MDGPT
+SAMGPT 
+MDGFM
+RAG-GFM
+RAG-GFM
+RAG-GFM
+MDGFM
+MDGFM
+MDGPT
+MDGPT
+SAMGPT
+SAMGPT
+GCOPE
+GCOPE
+40 60 80 100 120
+GPU Memory Efficiency (GB)
+Figure5:EfficiencyAnalysisonCiteSeer.
+5.3 RQ2:AblationStudy
+Weconductablationstudiesonthreecoremodules:
+•RAG-GFM(w/oAlign):removethecross-viewknowledgealign
+mentinpre-training(Section4.2).Semanticandstructuralen
+codersaretrainedindependentlywithoutmutualconsistency.
+•RAG-GFM(w/oTextQA):removethesemanticretrievalinfine
+tuning(Section4.3).Textualaugmentationisdisabledandrelies
+onlyonstructuralretrievalandparameterizedfeatures.
+•RAG-GFM(w/oStructQA):removethestructuralretrievalin
+fine-tuning(Section4.3).Structuralaugmentationisdiscarded,
+leavingonlytextualretrievalandparameterizedfeatures.
+ResultsinFigure3demonstratethefullRAG-GFMachievesthe
+bestresultsacrossbothsettings.RAG-GFM(w/oAlign)causesclear
+drops(e.g.,59.2%to53.6%onCora),underscoringtheimportance
+ofsemantic-structuralconsistencyinpre-training.RAG-GFM(w/o
+TextQA)leadstothelargestdecline(nearly8%onWiki-CS),show
+ingthatrawattributesaloneareinsufficientandexternalsemantic
+evidenceisessential.RAG-GFM(w/oStructQA)alsoreducesaccu
+racy(e.g.,69.1%to67.2%onCora),thoughlessseverely, indicating
+thatmotif-levelcuesprovidesecondarybutstablebenefits.
+5.4 RQ3:Zero-shotReasoningwithLLMs
+Toin-depthexaminethepotentialoflargelanguagemodels(LLMs),
+weevaluateazero-shotsettingwithoutfine-tuning.Twoscenarios
+arecompared:(1)zero-shot,wherethepre-trainedmodelsdirectly
+predictwithoutsupervision,and(2)zero-shotwithLLM,where
+thegraphtaskisreformulatedintolanguagequeries(e.g.,“Which
+classdoesthisnodebelongto?”).Eachtargetnodeisaugmented
+withretrievedtextualandstructuralcontextfromthepre-training
+database,concatenatedwithitsrawdescription,andfedintoan
+LLM(weuseQwen2-7B-Instruct[55])toproducepredictions.This
+setupallowsustoassesswhetherexternal languagepriorscan
+compensatefortheabsenceoflabeledexamples.
+Asbaselines,weselectGFMsfortext-attributedgraphs,most
+ofwhichalreadyleverageLLMsasfeatureenhancersorsemantic
+alignersduringpre-training.However,thesedesignsdonotdirectly
+testwhetherLLMsthemselvescanserveaszero-shotreasoners.
+ResultsinFigure4demonstratethatwhileRAG-GFMiscom
+petitiveasanLLM-freeGFM, itissometimesslightlybehindLLM
+enhancedbaselinesinthezero-shotcase.Notably,onceequipped
+withLLMreasoning, itconsistentlyachievesthebestperformance,
+improvingfrom55.7%to63.3%onPubMedandfrom53.8%to61.7%
+onOgbn-Products,surpassingallbaselines.Moreimportantly,the
+gainsarenotsimplyduetoinvokingstrongerLLMs:bygrounding
+reasoninginourunifieddual-modalretrievaldatabase,theprompts
+providestructured,domain-alignedevidencethatenablesLLMsto
+generalizemorefaithfullyacrossunseengraphs.Furthermore,even
+existingLLM-enhancedGFMsbenefitfromourretrieval-augmented
+prompting,highlightingthatRAG-GFMisnotonlyeffectiveinits
+owndesignbutalsoservesasageneral,pluggableenhancement
+thatcanuniversallyelevatezero-shotreasoningingraphlearning.
+5.5 RQ4:TimeandMemoryEfficiency
+WefurthercompareRAG-GFMwithfourstate-of-the-arttext-free
+GFMsintermsoffine-tuningefficiencyonCiteSeerunderLODO
+(dataset).Wereportboththenumberofepisodesrequiredtoreach
+stableaccuracyandthepeakGPUmemoryusage.Asshownin
+Figure5,RAG-GFMachievesclearadvantagesonbothfronts.In
+termsof time, itconvergesmuchfaster,asretrieval-augmented
+promptsinjectexternalknowledgedirectlywithoutcostlyparam
+eterupdates.Formemory,mostknowledgeisexternalizedtothe
+dual-modaldatabase,whereonlylightweightpromptsareopti
+mizedwhileencodersremainfrozen,reducingGPUusagetoless
+thanhalfofMDGFM.AlthoughGCOPEandSAMGPTcanreachcompa
+rableaccuracy,theyrequire2-3×moreepisodesandsubstantially
+highermemory,whichlimitstheirscalabilityinpractice.
+WWW’26,April13–17,2026,Dubai,UnitedArabEmirates HaonanYuan,QingyunSun,JiachengTao,XingchengFu,andJianxinLi
+1.0
+0.8
+0.6
+0.4
+0.2
+0.0
+Cross-View Correlation
+CiteSeer PubMed
+Ogbn
+Products Wiki-CS
+CiteSeer PubMed
+Ogbn
+Products Wiki-CS
+Cora
+(query node)
+1.0
+0.8
+0.6
+0.4
+0.2
+0.0
+Query-Answer Attention
+0.8
+0.6
+0.4
+0.2
+0.0
+Cross-View Correlation
+0.8
+0.6
+0.4
+0.2
+Query-Answer Attention
+Ogbn-Products
+(query node)                  0.0
+Cora CiteSeer PubMed Wiki-CS
+1.0 Cora CiteSeer PubMed Wiki-CS 1.0
+Figure6:RAGCorrelationMap.
+1 2 3 4 5 6 7 8 9 10
+40
+45
+50
+55
+60
+Accuracy (%)
+Node Classification
+1 2 3 4 5 6 7 8 9 10
+m-shot
+50
+60
+70
+Accuracy (%)
+Graph Classification
+5
+0
+5
+10
+15
+Growth rate (%)
+5
+0
+5
+10
+15
+Growth rate (%)
+SAMGPT 
+GraphCLIP
+UniGraph 
+m
+m
+RAG-GFM
+Figure7:𝒎-ShotClassification(CiteSeer).
+0.2 0.4 0.6 0.8 55.0
+60.0
+Accuracy (%)
+2 4 6 8
+55.0
+60.0
+0.0 0.1 0.2 0.3
+50.0
+55.0
+60.0
+Accuracy (%)
+0.1 0.15 0.2 0.25
+55.0
+60.0
+65.0
+0.2 0.4 0.6 0.8
+40.0
+45.0
+50.0
+Accuracy (%)
+3 5 7 9
+45.0
+50.0
+0.0 0.1 0.2 0.3
+40.0
+45.0
+50.0
+Accuracy (%)
+0.0 0.01 0.05 0.1
+40.0
+45.0
+50.0
+55.0
+LODO (dataset, PubMed)
+LODO (domain, Wiki-CS)
+γ
+γ
+k
+k
+λtext
+λtext
+λstruct
+λstruct
+Figure8:Hyper-parameterAnalysis.
+5.6 RQ5:ReliabilityandInterpretabilityofRAG
+WeassessthereliabilityandinterpretabilityofRAGbyvisualizing
+itsretrievalbehaviorunderLODO(dataset)andLODO(domain)
+settings.Weconstructacross-viewcorrelationmapandquery
+answerattentionvisualization,whereheatmapscapturesemantic
+structural correlationsacrosssourcedatasets, andcurvedlines
+indicatetheattentionbetweenaquerynodeandretrievedsource
+nodes,withcolorandthicknessreflectingattentionintensity.
+AsshowninFigure6,cleardiagonalblocksemergeinthecor
+relationmaps, indicatingstrongsemantic-structuralconsistency
+withindatasets,whilecross-datasetorcross-domaincorrelations
+remainlow.Datasetsfromthesamedomain(e.g.,CiteSeerand
+PubMed)stillexhibitrelativelyhighercorrelations,suggestingtrans
+ferablewithin-domainrelations.InLODO(dataset),aqueryfrom
+Coraassignshigherattentiontocitation-domainsources,reflect
+ingadaptiveretrievalofalignedknowledge.InLODO(domain),
+attentionbecomesmoreevenlydistributedacrossunseendomains
+whilemaintainingweakbutinformativefocusonpartiallyaligned
+datasetssuchasCoraandWiki-CS.
+5.7 RQ6:SensitivitytoHyper-parameters
+WeevaluatetherobustnessofRAG-GFMundertwogroups.
+𝒎-ShotClassification.Figure7presentstheperformancetrends
+as𝑚increasesofbothnodeandgraphclassificationtasksonthe
+LODO(dataset,CiteSeer)setting.Allmethodsexhibitasatura
+tioncurve,whereaccuracyimprovesrapidlywhenmovingfrom
+extremelylow-shot(1-3samples)tomoderate-shot(5-6samples)
+andthenstabilizes.Notably,RAG-GFMconsistentlyoutperforms
+allbaselinesatmostoftheshots,achievinghigheraccuracyand
+smootherconvergence.Theblackdashedlinedepictsitsgrowth
+rate, showingasharpimprovementatearlystagesfollowedby
+stablegains, indicatingthatretrieval-augmentedpromptingaccel
+erateslabelefficiencyandmitigatesoverfittinginlow-shotregimes.
+SensitivityAnalysis.ResultsareshowninFigure8.Across
+bothLODO(dataset,PubMed)andLODO(domain,Wiki-CS)set
+tings,performanceremainsstableundermoderateperturbations.
+For𝛾,theweightofthedomain-tokenregularizerinEq.(15),overly
+largevaluesdegradeperformancebysuppressingdomainpriors.
+For𝑘,thenumberofretrievedquery-answerpairs(Section4.3.2),
+moderatevaluesbestbalanceretrievaldiversityandnoise.Accu
+racypeaksnear𝜆text=0.1inEq.(18), indicatingitsbenefitsfrom
+moderatetextualretrieval,whilelargervaluescausedrift.Similarly,
+moderate𝜆struct inEq.(19)yieldsstableperformance,asexcessive
+structuralsignalsmayintroducebias.Overall,thesetrendsdemon
+straterobustnesswithoutfine-grainedtuning.
+6 Conclusion
+Inthiswork,weproposeaRetrieval-AugmentedGenerationaided
+GraphFoundationModelnamedRAG-GFMthatmitigatesthein
+memorybottleneckofexistingGFMsbyexternalizingknowledge
+intoaunifiedsemantic-structuralretrievaldatabase.Insteadofen
+codingpriorsintoparameters,RAG-GFMdecouplesparameterized
+learningfromretrievableknowledge,enablinginterpretableand
+efficientadaptation.Throughcross-viewalignmentandretrieval
+augmentedprompting,theframeworkachievesefficientgeneral
+izationacrossdomainsanddatasets.Extensiveexperimentsdemon
+stratethatRAG-GFMconsistentlysurpassesstate-of-the-artGFMs
+ineffectiveness,efficiency,androbustnessacrossdiversesettings.
+Acknowledgments
+ThecorrespondingauthorisJianxinLi.Authorsofthisworkare
+supportedinpartbyNSFCundergrantsNo.623B2010,No.62225202,
+andNo.62302023,bytheFundamentalResearchFundsfortheCen
+tralUniversities,andbytheAcademicExcellenceFoundationof
+BUAAforPhDStudents.Weextendoursincerethankstoallauthors
+fortheirvaluablecontributions.
+Overcoming In-Memory Bottlenecks in Graph Foundation Models via Retrieval-Augmented Generation
+WWW’26,April 13–17, 2026, Dubai, United Arab Emirates
+References
+[1] Eric Z Ayers and John T Stasko. 1995. Using graphic history in browsing the
+World Wide Web. In WWW. 451–459.
+[2] Yuxuan Cao, Jiarong Xu, Carl Yang, Jiaan Wang, Yunchao Zhang, Chunping
+Wang, Lei Chen, and Yang Yang. 2023. When to pre-train graph neural networks?
+From data generation perspective!. In KDD. 142–153.
+[3] Deli Chen, Yankai Lin, Wei Li, Peng Li, Jie Zhou, and Xu Sun. 2020. Measuring
+and relieving the over-smoothing problem for graph neural networks from the
+topological view. In AAAI, Vol. 34. 3438–3445.
+[4] Ke-Jia Chen, Jiajun Zhang, Linpu Jiang, Yunyun Wang, and Yuxuan Dai. 2022.
+Pre-training on dynamic graph neural networks. Neurocomputing 500 (2022),
+679–687.
+[5] Ernesto Estrada and Juan A Rodriguez-Velazquez. 2005. Subgraph centrality
+in complex networks. Physical Review E—Statistical, Nonlinear, and Soft Matter
+Physics 71, 5 (2005), 056103.
+[6] Wenqi Fan, Yujuan Ding, Liangbo Ning, Shijie Wang, Hengyun Li, Dawei Yin,
+Tat-Seng Chua, and Qing Li. 2024. A survey on rag meeting LLMs: Towards
+retrieval-augmented large language models. In KDD. 6491–6501.
+[7] Wenqi Fan, Yao Ma, Qing Li, Yuan He, Eric Zhao, Jiliang Tang, and Dawei Yin.
+2019. Graph neural networks for social recommendation. In WWW. 417–426.
+[8] C Lee Giles, Kurt D Bollacker, and Steve Lawrence. 1998. CiteSeer: An automatic
+citation indexing system. In Proceedings of the Third ACM Conference on Digital
+Libraries. 89–98.
+[9] VladimirGligorijević, P DouglasRenfrew,TomaszKosciolek,JuliaKoehlerLeman,
+Daniel Berenberg, Tommi Vatanen, Chris Chandler, Bryn C Taylor, Ian M Fisk,
+Hera Vlamakis, et al. 2021. Structure-based protein function prediction using
+graph convolutional networks. Nature Communications 12, 1 (2021), 3168.
+[10] ZihaoGuo,QingyunSun,HaonanYuan,XingchengFu,MinZhou,YisenGao,and
+Jianxin Li. 2025. GraphMoRE: Mitigating topological heterogeneity via mixture
+of Riemannian experts. In AAAI, Vol. 39. 11754–11762.
+[11] Zihao Guo, Qingyun Sun, Ziwei Zhang, Haonan Yuan, Huiping Zhuang,
+Xingcheng Fu, and Jianxin Li. 2025. GraphKeeper: Graph domain-incremental
+learning via knowledge disentanglement and preservation. In NeurIPS.
+[12] Will Hamilton, Zhitao Ying, and Jure Leskovec. 2017. Inductive representation
+learning on large graphs. NeurIPS 30 (2017).
+[13] Haoyu Han, Yu Wang, Harry Shomer, Kai Guo, Jiayuan Ding, Yongjia Lei, Ma
+hantesh Halappanavar, Ryan A Rossi, Subhabrata Mukherjee, Xianfeng Tang,
+et al. 2024. Retrieval-augmented generation with graphs (GraphRAG). arXiv
+preprint arXiv:2501.00309 (2024).
+[14] Yufei He, Yuan Sui, Xiaoxin He, and Bryan Hooi. 2025. UniGraph: Learning
+a unified cross-domain foundation model for text-attributed graphs. In KDD.
+448–459.
+[15] Weihua Hu, Matthias Fey, Marinka Zitnik, Yuxiao Dong, Hongyu Ren, Bowen
+Liu, Michele Catasta, and Jure Leskovec. 2020. Open graph benchmark: Datasets
+for machine learning on graphs. NeurIPS 33 (2020), 22118–22133.
+[16] QianHuang,HongyuRen,andJureLeskovec.2022. Few-shotrelationalreasoning
+via connection subgraph pretraining. NeurIPS 35 (2022), 6397–6409.
+[17] Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-Yu,
+YimingYang,JamieCallan, andGrahamNeubig.2023. Activeretrievalaugmented
+generation. In EMNLP. 7969–7992.
+[18] Nicolas Keriven. 2022. Not too little, not too much: A theoretical analysis of
+graph (over) smoothing. NeurIPS 35 (2022), 2268–2281.
+[19] Jiho Kim, Sungjin Park, Yeonsu Kwon, Yohan Jo, James Thorne, and Edward
+Choi. 2023. FactKG: Fact verification via reasoning on knowledge graphs. In ACL.
+16190–16206.
+[20] ThomasNKipfandMaxWelling.2017. Semi-supervised classification with graph
+convolutional networks. In ICLR.
+[21] Alexander Kraskov, Harald Stögbauer, and Peter Grassberger. 2004. Estimating
+mutual information. Physical Review E—Statistical, Nonlinear, and Soft Matter
+Physics 69, 6 (2004), 066138.
+[22] PatrickLewis,EthanPerez,AleksandraPiktus,FabioPetroni,VladimirKarpukhin,
+Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel,
+et al. 2020. Retrieval-augmented generation for knowledge-intensive NLP tasks.
+NeurIPS 33 (2020), 9459–9474.
+[23] Xinze Li, Zhenghao Liu, Chenyan Xiong, Shi Yu, Yu Gu, Zhiyuan Liu, and Ge Yu.
+2023. Structure-aware language model pretraining improves dense retrieval on
+structured data. In ACL Findings. 11560–11574.
+[24] Yuhan Li, Peisong Wang, Zhixun Li, Jeffrey Xu Yu, and Jia Li. 2024. ZeroG:
+Investigating cross-dataset zero-shot transferability in graphs. In KDD. 1725
+1735.
+[25] Hao Liu, Jiarui Feng, Lecheng Kong, Ningyue Liang, Dacheng Tao, Yixin Chen,
+and Muhan Zhang. 2024. One for all: Towards training one graph model for all
+classification tasks. In ICLR.
+[26] Jingzhe Liu, Haitao Mao, Zhikai Chen, Wenqi Fan, Mingxuan Ju, Tong Zhao, Neil
+Shah, and Jiliang Tang. 2024. One model for one graph: A new perspective for
+pretraining with cross-domain graphs. arXiv preprint arXiv:2412.00315 (2024).
+[27] Zemin Liu, Xingtong Yu, Yuan Fang, and Xinming Zhang. 2023. GraphPrompt:
+Unifying pre-training and downstreamtasksforgraphneuralnetworks.InWWW.
+417–428.
+[28] YuanfuLu,XunqiangJiang,YuanFang,andChuanShi.2021. Learningtopre-train
+graph neural networks. AAAI 35, 5 (2021), 4276–4284.
+[29] Jiayi Luo, Qingyun Sun, Lingjuan Lyu, Ziwei Zhang, Haonan Yuan, Xingcheng
+Fu, and Jianxin Li. 2026. Towards effective, stealthy, and persistent backdoor
+attacks targeting graph foundation models. In AAAI.
+[30] Jiayi Luo, Qingyun Sun, Yuecen Wei, Haonan Yuan, Xingcheng Fu, and Jianxin
+Li. 2026. Privacy auditing of multi-domain graph pre-trained model under mem
+bership inference attacks. In AAAI.
+[31] Linhao Luo, Zicheng Zhao, Gholamreza Haffari, Dinh Phung, Chen Gong, and
+Shirui Pan. 2025. GFM-RAG: graph foundation model for retrieval augmented
+generation. In NeurIPS.
+[32] Xinbei Ma, Yeyun Gong, Pengcheng He, Hai Zhao, and Nan Duan. 2023. Query
+rewriting in retrieval-augmented large language models. In EMNLP. 5303–5315.
+[33] Yao Ma and Jiliang Tang. 2021. Deep learning on graphs. Cambridge University
+Press.
+[34] Haitao Mao, Zhikai Chen, Wenzhuo Tang, Jianan Zhao, Yao Ma, Tong Zhao, Neil
+Shah, Mikhail Galkin, and Jiliang Tang. 2024. Position: Graph foundation models
+are already here. In ICML.
+[35] Andrew Kachites McCallum, Kamal Nigam, Jason Rennie, and Kristie Seymore.
+2000. Automating the construction of internet portals with machine learning.
+Information Retrieval 3 (2000), 127–163.
+[36] Péter Mernyei and Cătălina Cangea. 2020. Wiki-CS: A wikipedia-based bench
+mark for graph neural networks. arXiv preprint arXiv:2007.02901 (2020).
+[37] Aaron van den Oord, Yazhe Li, and Oriol Vinyals. 2018. Representation learning
+with contrastive predictive coding. arXiv preprint arXiv:1807.03748 (2018).
+[38] Karl Pearson. 1901. On lines and planes of closest fit to systems of points in space.
+The London, Edinburgh, and Dublin Philosophical Magazine and Journal of Science
+2, 11 (1901), 559–572.
+[39] Boci Peng, Yun Zhu, Yongchao Liu, Xiaohe Bo, Haizhou Shi, Chuntao Hong, Yan
+Zhang, and Siliang Tang. 2024. Graph retrieval-augmented generation: A survey.
+arXiv preprint arXiv:2408.08921 (2024).
+[40] Ori Ram, Yoav Levine, Itay Dalmedigos, Dor Muhlgay, Amnon Shashua, Kevin
+Leyton-Brown, and YoavShoham.2023. In-context retrieval-augmented language
+models. TACL 11 (2023), 1316–1331.
+[41] Vinay Venkatesh Ramasesh, Aitor Lewkowycz, and Ethan Dyer. 2021. Effect of
+scale on catastrophic forgetting in neural networks. In ICLR.
+[42] Prithviraj Sen, Galileo Namata, Mustafa Bilgic, Lise Getoor, Brian Galligher, and
+Tina Eliassi-Rad. 2008. Collective classification in network data. AI Magazine 29,
+3 (2008), 93–93.
+[43] Chuan Shi, Junze Chen, Jiawei Liu, and Cheng Yang. 2024. Graph foundation
+model. Frontiers of Computer Science 18, 6 (2024).
+[44] Junhua Shi, Qingyun Sun, Haonan Yuan, and Xingcheng Fu. 2026. SA2GFM:
+Enhancing robust graph foundation models with structure-aware semantic aug
+mentation. In AAAI.
+[45] Joshua Southern, Yam Eitan, Guy Bar-Shalom, Michael M Bronstein, Haggai
+Maron, and Fabrizio Frasca. 2025. Balancing efficiency and expressiveness: Sub
+graph GNNs with walk-based centrality. In ICML.
+[46] Fan-Yun Sun, Jordan Hoffman, Vikas Verma, and Jian Tang. 2020. InfoGraph: Un
+supervised and semi-supervised graph-level representation learning via mutual
+information maximization. In ICLR.
+[47] Mingchen Sun, Kaixiong Zhou, Xin He, Ying Wang, and Xin Wang. 2022. GPPT:
+Graph pre-training and prompt tuning to generalize graph neural networks. In
+KDD. 1717–1727.
+[48] Qingyun Sun, Yi Huang, Haonan Yuan, Xingcheng Fu, Yisen Gao, Jia Wu, Shujian
+Yu, Angsheng Li, Jianxin Li, and Philip S Yu. 2026. Information-Theoretic Foun
+dations and Advances in Graph Machine Learning: A Comprehensive Survey.
+Authorea Preprints (2026).
+[49] Qingyun Sun, Jiaqi Yuan, Shan He, Xiao Guan, Haonan Yuan, Xingcheng Fu,
+Jianxin Li, and Philip S Yu. 2025. DyG-RAG: Dynamic graph retrieval-augmented
+generation with event-centric reasoning. arXiv preprint arXiv:2507.13396 (2025).
+[50] Bosiljka Tadić. 2001. Dynamics of directed graphs: the world-wide Web. Physica
+A: Statistical Mechanics and its Applications 293, 1-2 (2001), 273–284.
+[51] YanchaoTan,ZihaoZhou,HangLv,WeimingLiu,andCarlYang.2024. WalkLM:A
+uniform language model fine-tuning framework for attributed graph embedding.
+NeurIPS 36 (2024).
+[52] Jiabin Tang, Yuhao Yang, Wei Wei, Lei Shi, Long Xia, Dawei Yin, and Chao Huang.
+2024. HiGPT: Heterogeneous graph language model. In KDD. 2842–2853.
+[53] Wenzhuo Tang, Haitao Mao, Danial Dervovic, Ivan Brugere, Saumitra Mishra,
+Yuying Xie, and Jiliang Tang. 2024. Cross-domain graph data scaling: a showcase
+with diffusion models. arXiv preprint arXiv:2406.01899 (2024).
+[54] Yixuan Tang and Yi Yang. 2024. Multihop-RAG: Benchmarking retrieval
+augmented generation for multi-hop queries. arXiv preprint arXiv:2401.15391
+(2024).
+[55] Qwen Team et al. 2024. Qwen2 technical report. arXiv preprint arXiv:2407.10671
+2 (2024), 3.
+WWW’26,April 13–17, 2026, Dubai, United Arab Emirates
+Haonan Yuan, Qingyun Sun, Jiacheng Tao, Xingcheng Fu, and Jianxin Li
+[56] Yijun Tian, Huan Song, Zichen Wang, Haozhu Wang, Ziqing Hu, Fang Wang,
+Nitesh V Chawla, and Panpan Xu. 2024. Graph neural prompting with large
+language models. In AAAI, Vol. 38. 19080–19088.
+[57] Naftali Tishby, Fernando C Pereira, and William Bialek. 2000. The information
+bottleneck method. arXiv preprint physics/0004057 (2000).
+[58] Naftali Tishby and Noga Zaslavsky. 2015. Deep learning and the information
+bottleneck principle. In IEEE Information Theory Workshop. IEEE, 1–5.
+[59] Petar Veličković, Guillem Cucurull, Arantxa Casanova, Adriana Romero, Pietro
+Liò, and Yoshua Bengi. 2018. Graph attention networks. In ICLR.
+[60] Petar Veličković, William Fedus, William L. Hamilton, Pietro Liò, Yoshua Bengio,
+and R Devon Hjelm. 2019. Deep Graph Infomax. In ICLR.
+[61] Heng Wang, Shangbin Feng, Tianxing He, Zhaoxuan Tan, Xiaochuang Han, and
+Yulia Tsvetkov. 2024. Can language models solve graph problems in natural
+language? NeurIPS 36 (2024).
+[62] Hongwei Wang, Fuzheng Zhang, Mengdi Zhang, Jure Leskovec, Miao Zhao,
+Wenjie Li, and Zhongyuan Wang.2019. Knowledge-aware graph neural networks
+with label smoothness regularization for recommender systems. In KDD. 968
+977.
+[63] Quan Wang, Zhendong Mao, Bin Wang, and Li Guo. 2017. Knowledge graph
+embedding: A survey of approaches and applications. IEEE TKDE 29, 12 (2017),
+2724–2743.
+[64] Shuo Wang, Bokui Wang, Zhixiang Shen, Boyan Deng, and Zhao Kang. 2025.
+Multi-domain graph foundation models: robust knowledge transfer via topology
+alignment. ICML (2025).
+[65] ShuWu,YuyuanTang,Yanqiao Zhu, Liang Wang, Xing Xie, and Tieniu Tan. 2019.
+Session-based recommendation with graph neural networks. AAAI 33, 01 (2019),
+346–353.
+[66] Feng Xia, Ke Sun, Shuo Yu, Abdul Aziz, Liangtian Wan, Shirui Pan, and Huan
+Liu. 2021. Graph learning: A survey. IEEE TAI 2, 2 (2021), 109–127.
+[67] Kewei Xiong, Wei Wang, Ruofan Ding, Dinglin Luo, Yangmei Qin, Xudong Zou,
+Jiguang Wang,ChenYu,andLeiLi.2026. Multimodal-based analysis of single-cell
+ATAC-seq data enables highly accurate delineation of clinically relevant tumor
+cell subpopulations. Genome Medicine (2026).
+[68] Yaming Yang, Ziyu Guan, Zhe Wang, Wei Zhao, Cai Xu, Weigang Lu, and Jian
+bin Huang. 2022. Self-supervised heterogeneous graph pre-training based on
+structural clustering. NeurIPS 35 (2022), 16962–16974.
+[69] Gustavo Ye. 2024. nano-vectordb. https://github.com/gusye1234/nano-vectordb
+[70] Zixuan Yi, Iadh Ounis, and Craig Macdonald. 2023. Contrastive graph prompt
+tuning for cross-domain recommendation. ACM TOIS 42, 2 (2023), 1–28.
+[71] Jun Yin, Chaozhuo Li, Hao Yan, Jianxun Lian, and Senzhang Wang. 2023. Train
+once and explain everywhere: Pre-training interpretable graph neural networks.
+NeurIPS 36 (2023), 35277–35299.
+[72] Yuning You, Tianlong Chen, Yongduo Sui, Ting Chen, Zhangyang Wang, and
+Yang Shen. 2020. Graph contrastive learning with augmentations. NeurIPS 33
+(2020), 5812–5823.
+[73] Xingtong Yu, Yuan Fang, Zemin Liu, and Xinming Zhang. 2024. HGPrompt:
+Bridging homogeneous and heterogeneous graphs for few-shot prompt learning.
+AAAI 38, 15 (2024), 16578–16586.
+[74] Xingtong Yu, Zechuan Gong, Chang Zhou, Yuan Fang, and Hui Zhang. 2025.
+Samgpt: Text-free graph foundation model for multi-domain pre-training and
+cross-domain adaptation. In WWW. 1142–1153.
+[75] Xingtong Yu, ChangZhou,YuanFang,andXinmingZhang.2024. Text-free multi
+domain graph pre-training: toward graph foundation models. arXiv preprint
+arXiv:2405.13934 (2024).
+[76] Haonan Yuan, Qingyun Sun, Xingcheng Fu, Ziwei Zhang, Cheng Ji, Hao Peng,
+and Jianxin Li. 2023. Environment-aware dynamic graph learning for out-of
+distribution generalization. NeurIPS 36 (2023), 49715–49747.
+[77] Haonan Yuan, Qingyun Sun, Junhua Shi, Xingcheng Fu, Bryan Hooi, Jianxin Li,
+and Philip S Yu. 2025. GRAVER: Generative graph vocabularies for robust graph
+foundation models fine-tuning. In NeurIPS.
+[78] Haonan Yuan, Qingyun Sun, Junhua Shi, Xingcheng Fu, Bryan Hooi, Jianxin Li,
+and Philip S Yu. 2025. How much can transfer? BRIDGE: Bounded multi-domain
+graph foundation model with generalization guarantees. In ICML.
+[79] Yongqi Zhang and Quanming Yao. 2022. Knowledge graph reasoning with
+relational digraph. In WWW. 912–924.
+[80] Zaixi Zhang, Qi Liu, Hao Wang, Chengqiang Lu, and Chee-Kong Lee. 2021. Motif
+based graph self-supervised learning for molecular property prediction. NeurIPS
+34 (2021), 15870–15882.
+[81] Haihong Zhao, Aochuan Chen, Xiangguo Sun, Hong Cheng, and Jia Li. 2024. All
+in one and one for all: A simple yet effective method towards cross-domain graph
+pretraining. In KDD. 4443–4454.
+[82] Hongbo Zhao, Bolin Ni, Junsong Fan, Yuxi Wang, Yuntao Chen, Gaofeng Meng,
+and Zhaoxiang Zhang. 2024. Continual forgetting for pre-trained vision models.
+In CVPR. 28631–28642.
+[83] Yun Zhu, Haizhou Shi, Xiaotang Wang, Yongchao Liu, Yaoke Wang, Boci Peng,
+Chuntao Hong, and Siliang Tang. 2025. GraphCLIP: Enhancing transferability in
+graph foundation models for text-attributed graphs. In WWW. 2183–2197.
+A AlgorithmsandComplexity Analysis
+Weillustrate the overall pre-training pipeline of RAG-GFM in Al
+gorithm 1, and the fine-tuning pipeline in Algorithm 2.
+A.1 Complexity Analsys of Algorithm 1
+The pre-training pipeline mainly consists of three stages:
+Database Construction. For each source domain 𝐷S
+𝑖 with 𝑁𝑖
+nodes, 𝐸𝑖 edges, and feature dimension 𝑑𝑖, we first project node
+features into a unified space of dimension 𝑑0 via PCA, which costs
+O(𝑁𝑖𝑑𝑖𝑑0). BERT encodes each node’s text with the complexity of
+O(𝑁𝑖𝐶BERT), where 𝐶BERT denotes the per-sample encoding cost.
+For the structural store, computing 𝐾-order WSE requires O(𝐾𝐸𝑖)
+with sparse matrix multiplications, followed by top-𝑀𝑖 anchor se
+lection O(𝑁𝑖 log𝑁𝑖) and ℎ-hop ego-subgraph extraction O(𝑀𝑖 
+¯𝑑ℎ
+𝑖 )
+with ¯𝑑𝑖 as average degree. Over 𝑛 domains, the complexity is:
+∑
+︁
+𝑛
+O
+𝑖=1
+𝑁𝑖𝑑𝑖𝑑0 + 𝑁𝑖𝐶BERT +𝐾𝐸𝑖 + 𝑁𝑖 log𝑁𝑖 +𝑀𝑖 
+¯𝑑ℎ
+𝑖 . (A.1)
+Cross-view Encoding. At each iteration, a mixed-domain batch
+Bofsize |B| issampled.Two𝐿-layerGNNencoderswithdimension
+𝑑 are applied to semantic and structural views, giving complexity:
+O2𝐿(𝐸B +|B|)𝑑 ,
+(A.2)
+where 𝐸B is the number of edges in the sampled batch B.
+Self-supervised Pre-training. The cross-view InfoNCE com
+putes pairwise similarities, with cost O(|B|2𝑑). The compression
+regularizers introduce O(|B|𝑑), negligible compared to the qua
+dratic term. Token regularization across 𝑛 domains costs O(𝑛𝑑).
+Overall Complexity. The dominant cost per iteration is:
+O𝐿(𝐸B +|B|)𝑑 + |B|2𝑑 ,
+(A.3)
+while database construction is a one-time preprocessing overhead.
+Summary. The dominant cost comes from GNN propagation
+and quadratic contrastive alignment. Database construction is per
+formed once and is negligible compared to iterative training.
+A.2 Complexity Analsys of Algorithm 2
+In the fine-tuning phase, the encoders 𝚯★
+𝑡 ,𝚯★
+𝑠 and domain tokens
+{𝝉𝐷} are frozen, and only prompt parameters 𝛀 are optimized.
+Preprocessing. For𝑚-shot support instances with raw dimen
+sion 𝑑T, preprocessing requires O(𝑚𝑑T𝑑0 +𝑚𝐶BERT).
+Domain-gated Fusion. For each support instance, similarities
+with 𝑛 domain tokens are computed at cost O(𝑚𝑛𝑑).
+Semantic Retrieval. Each query searches Dtext of size 𝑀text
+using approximate nearest neighbor (ANN) with O(log𝑀text) per
+query. Aggregating top-𝑘 answers incurs O(𝑘𝑑0). The total cost is:
+O𝑚(log𝑀text +𝑘𝑑0) .
+(A.4)
+Structural Retrieval. Each query searches the structural store
+of𝑛 domains,eachofsize𝑀struct. ANNsearchcosts O(𝑛·log𝑀struct),
+and fusing motif features requires O(𝑛𝑑). Thus:
+O𝑚(𝑛·log𝑀struct +𝑛𝑑) .
+(A.5)
+Prompted adaptation. Prompt construction and concatenation
+cost O(𝑚𝑑). The InfoNCE fine-tuning loss requires similarity with
+𝐶 class prototypes, giving O(𝑚𝐶𝑑).
+OvercomingIn-MemoryBottlenecksinGraphFoundationModelsviaRetrieval-AugmentedGeneration WWW’26,April13–17,2026,Dubai,UnitedArabEmirates
+Algorithm1:Overallpre-trainingpipelineofRAG-GFM.
+Input:𝑛sourcegraphs{𝐺S
+𝑖 }𝑛
+𝑖=1 fromdomain{𝐷S};Batch
+sizeB;Learningrate𝜂1;Pre-trainingepochs𝐸1.
+Output:Graphlearnerℎ=𝑔◦𝑓withparameters𝚯★
+𝑡 and
+𝚯★
+𝑠 ;Domaintokens{𝝉𝐷𝑖
+}𝑛
+𝑖=1.
+1 Initializealllearnableparametersrandomly;
+2 //EstablishtheUnifiedRetrievalDatabase
+3 foreach𝐺S
+𝑖 in{𝐺S
+𝑖 }𝑛
+𝑖=1do
+4 Representationtrack:ZS
+𝑖 ←Eq.(2),Eq.(3);
+5 Retrievaltrack:zS𝑣←Eq.(4)foreachnode𝑣;
+6 Establishthesemanticstore:Dtext←Eq.(4);
+7 Establishthestructuralstore:Dstruct←Eq.(8);
+8 //ComposeNodeViews
+9 for𝑒1=1,2,··· ,𝐸1do
+10 foreach𝐺S
+𝑖 in{𝐺S
+𝑖 }𝑛
+𝑖=1do
+11 Learnnodesemanticview:ZS
+𝑖 ←Eq.(2),Eq.(3);
+12 Learnnodestrcuturalview:WS
+𝑖 ←Eq.(9);
+13 //Self-supervisedInformationBottleneck
+14 Encodedual-embeddings:Htext
+𝑖 ,Hstruct
+𝑖 ←Eq.(11);
+15 foreachnode𝑣inthesampledbatchBdo
+16 Calculatethealignmentloss:L(𝑖,𝑣)
+align←Eq.(12);
+17 //TokenRegularizationandParameterUpdate
+18 Calculateoverallpre-trainingloss:Lpretrain←Eq.(15);
+19 Updatethemodelparameters𝚯𝑡,𝚯𝑠byminimizing
+Lpretrainandback-propagationwithlearningrate𝜂1;
+Overallcomplexity.Thedominantcostperiterationis:
+O𝑚[log𝑀text+𝑛·log𝑀struct+(𝑘+𝑛+𝐶)𝑑] . (A.6)
+Summary.Themainbottleneckliesinretrieval (logarithmic
+indatabasesize)andclassificationoverhead.Sincethebackbone
+parametersarefrozenandonlylightweightpromptsareupdated,
+fine-tuningissubstantiallymoreefficientthanfulladaptation.
+B Proofs
+B.1 ProofofProposition1
+WefirstrestateProposition1forreference.
+Proposition1(StructuralSeparabilityofWSE).Thereexistpairs
+ofnon-isomorphicgraphs𝐺1,𝐺2andnodes𝑣∈𝐺1,𝑢∈𝐺2such
+thatforanyfixedradius𝑟,the𝑟-hopneighborsN𝑟(𝑣)andN𝑟(𝑢)
+areisomorphic,yettheWalk-SpectrumEncodingssatisfy:
+CWSE
+𝛼 (𝑣)≠CWSE
+𝛼 (𝑢).
+Proof. Thesketchistoconstructapairofgraphsthatarecospec
+trallocally(same𝑟-neighbor)butdifferinglobalcyclestructure(e.g.,
+attachingdifferentlengthcyclesfarfromtherootwhilepreserv
+ingthefirst𝑟shells).Closed-walkcountsattherootincorporate
+returnsthattraversethosedistantcycles,whichappearonlyat
+higherorders.Hence,afinite𝐾separates𝑣and𝑢.Thisensures
+Algorithm2:Overallfine-tuningpipelineofRAG-GFM.
+Input:UnifieddatabaseD;Targetdomain𝐷T;Target
+graph(s)and𝑚-shotsupportsetST;Frozen
+parameters𝚯★
+𝑡 and𝚯★
+𝑠 ;Frozendomaintokens
+{𝝉𝐷𝑖
+}𝑛
+𝑖=1;Learningrate𝜂2;Fine-tuningepochs𝐸2.
+Output:Fine-tunedgraphlearnerℎ★=𝑔★(𝑓★)with
+parameters{𝚯★
+𝑡 ,𝚯★
+𝑠 ,𝛀★}.
+1 Initializealllearnableparametersrandomly;
+2 //PreprocessSupportSet
+3 foreachsupportnode(orgraph)inSTdo
+4 Learndimension-alignedfeatureXT←Eq.(2),Eq.(3);
+5 for𝑒1=1,2,··· ,𝐸2do
+6 foreachsupportnode(orgraph)inSTdo
+7 Encodeviapre-trainedlearner:ZT
+𝑖 ←Eq.(16);
+8 //Domain-gatedFusion
+9 Calculategatingweights:{𝜋𝑖,𝑘}𝑛
+𝑘=1←Eq.(16);
+10 //SemanticQueryandRetrieval
+11 QueryDtextandgetanswers: ΔzT𝑣
+text←Eq.(17);
+12 QueryDstructandgetanswers: ΔzT𝑣
+struct←Eq.(20);
+13 //In-contextAugmentationandPrompt
+14 Updateinstanceembedding:zT′′ 𝑣 ←Eq.(18),Eq.(19);
+15 Inialize𝑷𝛀←Eq.(21)andprompt:hT
+𝑖 ←Eq.(21);
+16 //Few-shotAdaptationandParameter Update
+17 Calculatethefine-tuningloss:Lfine-tne←Eq.(22);
+18 Updatethepromptparameters𝛀byminimizing
+Lfine-tneandback-propagationwithlearningrate𝜂2;
+thattraditional𝑟-hopmethods[45]cannotdistinguishthem,while
+WSEproducesdifferentsignatures.
+Formally,fixanyradius𝑟.Let𝑃𝑟+1=(𝑥0,𝑥1,...,𝑥𝑟+1)beapath
+oflength𝑟+1,withroot𝑥0.Attheendpoint𝑥𝑟+1,weattachacycle.
+Ingraph𝐺1,weattachanoddcycle𝐶𝑝oflength𝑝⩾3,whilein
+graph𝐺2,weattachanevencycle𝐶𝑞oflength𝑞⩾4.Denotethe
+rootsby𝑣=𝑥0∈𝐺1and𝑢=𝑥0∈𝐺2.
+Asthecycleappearsonlybeyondradius𝑟,theneighborsN𝑟(𝑣)
+andN𝑟(𝑢)bothreducetopath(𝑥0,··· ,𝑥𝑟),andareisomorphic:
+N𝑟(𝑣) N𝑟(𝑢). (B.1)
+Considerclosedwalksthatgofromtheroottothecycle,traverse
+it,andreturn.In𝐺1,theshortestsuchclosedwalkhaslength𝐾1=
+2(𝑟+1)+𝑝,whilein𝐺2 theshortestlengthis𝐾2=2(𝑟+1)+𝑞,
+andinfactanyclosedwalkusingthecyclein𝐺2haslength:
+𝐾=2(𝑟+1)+𝑞+2ℓ, ℓ⩾0, (B.2)
+whichisalwayseven.Since𝑝isodd,𝐾1 isodd,andtherefore:
+A𝐾1
+𝐺1 𝑣𝑣>0, A𝐾1
+𝐺2 𝑢𝑢=0. (B.3)
+BythedefinitionofWSEthat𝐶WSE 𝛼 (𝑧)[𝑘] =𝛼𝑘A𝑘 𝑧𝑧, sothetwo
+encodingsmustdifferatcoordinate𝐾1.Hence,weconcludethat:
+CWSE
+𝛼 (𝑣)≠CWSE
+𝛼 (𝑢), (B.4)
+whichestablishesthatWSEseparatesnodesindistinguishableby
+localneighborhoods.Weconcludetheproof. □
+WWW’26,April13–17,2026,Dubai,UnitedArabEmirates HaonanYuan,QingyunSun,JiachengTao,XingchengFu,andJianxinLi
+B.2 ProofofProposition2
+WefirstrestateProposition2forreference.
+Proposition2(Cross-ViewMutualInformationBounds).The
+relevancetermadmitstheInfoNCElower-boundestimator:
+𝐼 htext
+𝑖,𝑣 ;hstruct
+𝑖,𝑣 ⩽ 1
+|B|
+∑︁
+𝑣∈B
+log
+exp𝜎𝑔𝑡(htext
+𝑖,𝑣 ),𝑔𝑠(hstruct
+𝑖,𝑣 )/𝜏
+𝑢∈B
+exp𝜎𝑔𝑡(htext
+𝑖,𝑣 ),𝑔𝑠(hstruct
+𝑖,𝑢 )/𝜏 ,
+where𝑔𝑡,𝑔𝑠areprojections,𝜎(·)issimilarity,𝜏isatemperature,
+positivesareformedbythesamenodeacrosstheviews(𝑣,𝑣)
+inabatchB,andnegativesbymismatchednodes(𝑣,𝑢),𝑢≠𝑣.
+..........................................................
+Thecompressiontermcanbeupper-boundedviaKL-divergence:
+𝐼 h·
+𝑖,𝑣;xS
+𝑖,𝑣⩾E𝑝(h·
+𝑖,𝑣 ,xS
+𝑖,𝑣 ) log𝑞𝜙 h·
+𝑖,𝑣|xS
+𝑖,𝑣 −E𝑝(h·
+𝑖,𝑣 ) log𝑝h·
+𝑖,𝑣 ,
+where𝑣 issampledfromB,xdenoteszorw,and𝑞𝜙(·|·) isa
+variationalapproximationofthetrueconditionaldistribution.
+Proof. (1)RelevanceTerm(InfoNCELowerBound).Themu
+tualinformationbetweensemanticandstructuralembeddingsis:
+𝐼(htext
+𝑖,𝑣 ;hstruct
+𝑖,𝑣 )=E𝑝(htext
+𝑖,𝑣 ,hstruct
+𝑖,𝑣 ) log
+𝑝(htext
+𝑖,𝑣 |hstruct
+𝑖,𝑣 )
+𝑝(htext
+𝑖,𝑣 ) . (B.5)
+Directlycomputingisintractable.Followingthecontrastivees
+timationframeworkof InfoNCE[37],weapproximateitwitha
+similarity-basedclassificationtaskthatdistinguishespositivepairs
+(samenodeacrossviews)fromnegativepairs(differentnodes).
+GivenabatchBofnodes,wedefinethesimilarityscore𝑠𝑣𝑢=
+𝜎(𝑔𝑡(htext
+𝑖,𝑣 ),𝑔𝑠(hstruct
+𝑖,𝑢 )),where𝑔𝑡,𝑔𝑠areprojectionheadsand𝜎(·)
+issimilarity.ThentheInfoNCElowerboundbecomes:
+𝐼(htext
+𝑖,𝑣 ;hstruct
+𝑖,𝑣 )⩾ 1
+|B|
+∑︁
+𝑣∈B
+log exp(𝑠𝑣𝑣/𝜏)
+𝑢∈Bexp(𝑠𝑣𝑢/𝜏) , (B.6)
+where𝜏isatemperature.ThiscorrespondstoEq.(13)andprovides
+avariationallowerboundofthecross-viewrelevance,encouraging
+semanticandstructuralembeddingsofthesamenodetoalignwhile
+contrastingmismatchedpairs.
+(2)CompressionTerm(KLUpperBound).Weconsiderthe
+mutualinformationbetweenanembeddingh·
+𝑖,𝑣 (eithersemanticor
+structural)anditsinputfeatureX𝑆
+𝑖 .Bydefinition:
+𝐼(h·
+𝑖,𝑣;X𝑆
+𝑖 )=E𝑝(h,X) log 𝑝(h|X)
+𝑝(h) =E𝑝(h,X)[log𝑝(h|X)]
+=E𝑝(h)[log𝑝(h)]. (B.7)
+Sincetheconditionalposterior𝑝(h|X)isunknown,weintroduce
+avariationalapproximation𝑞𝜙(h|X).Usingthenon-negativityof
+theKLdivergence,weobtainanupperbound:
+E𝑝(h,X)[log𝑝(h|X)]⩽E𝑝(h,X)[log𝑞𝜙(h|X)]. (B.8)
+SubstitutingEq.(B.8)intoEq.(B.7)gives:
+𝐼(h·
+𝑖,𝑣;X𝑆
+𝑖 )⩽E𝑝(h,X)[log𝑞𝜙(h|X)]=E𝑝(h)[log𝑝(h)], (B.9)
+whichcorrespondstoEq.(14).Thisupperboundservesasavaria
+tionalsurrogatethatpenalizesredundantsignalswhilemaintaining
+tractability.Thefirsttermencouragescompressionthroughrecon
+structionunder𝑞𝜙,andthesecondtermregularizesthemarginal
+entropyofthelatentrepresentation. □
+TableC.1:Statisticsofthemulti-domaingraphdataset.
+Dataset Domain #Node #Edge #Feat.
+Dim. #Class Avg.
+#Deg.
+Cora[35] Citation 2,708 5,429 1,433 7 4.00
+CiteSeer[8] Citation 3,186 4,277 3,703 6 2.57
+PubMed[42] Citation 19,717 44,338 500 3 4.50
+Ogbn-Products
+(Tech.)[15] E-Commerce 47,4282,077,241 100 3 87.60
+Ogbn-Products
+(Home)[15] E-Commerce 9,790 131,841 100 5 26.93
+Wiki-CS[36] WebLink 11,701 216,123 300 10 36.94
+C ExperimentDetails
+C.1 DatasetDetails
+•CitationDomain:Cora[35],CiteSeer[8],andPubMed[42],
+wherenodesrepresentpapersandedgesdenotecitationlinks.
+Eachnodeisequippedwithtext-basedfeaturesderivedfrom
+titlesorabstracts.
+•E-CommerceDomain:containstwosubgraphsfromthelarge
+scaleOgbn-Products[15],includingOgbn-TechandOgbn-Home.
+NodesrepresentAmazonproducts,edgesindicateco-purchase
+relationships,andnodelabelscorrespondtoproductcategories,
+capturingconsumerbehavior.
+•WebLinkDomain:consistsoftheWiki-CS[36]dataset,where
+nodescorrespondtoWikipediaarticlesandedgesrepresenthy
+perlinks.Textualembeddingsextractedfromarticlecontentpro
+viderichsemanticinformationforweb-scalegraphlearning.
+C.2 ImplementationDetails
+Weintroducethegeneralimplementationdetailsbelow.
+Pre-training.Wepre-trainRAG-GFMforupto10,000epochs
+withearlystoppingfor50consecutiveepochs.Bothsemanticand
+structural encodersare2-layerGNNs.Theoverallpre-training
+objectivecombinesthecross-viewinformationbottlenecklossand
+thedomain-tokenregularizerweightedby𝛾tunedwithintherange
+of [0,1].TheAdamoptimizerisadopted,withthelearningrate
+andweightdecayselectedfrom[10−5,10−1]viagridsearchonthe
+validationset.Allparametersareinitializedfromscratch.
+Fine-tuning.Wefine-tunetheRAG-GFMforupto100episodes
+withanearlystoppingstrategy.Thepretrainedencoderparameters
+arefrozen,andonlythepromptparametersareupdated.Foreach
+querynode,weretrieve𝑘([1,10])query-answerpairsfromboth
+thesemanticandstructuraldatabases,whicharefusedwithweights
+𝜆text ([0,1])and𝜆struct ([0,1])toformretrieval-augmentedprompts.
+Thefinalfine-tuningobjectiveisoptimizedbyAdamwiththesame
+learningrateandweightdecaysettingsasinpre-training.
+Environment.Experimentsareconductedwith:
+•OperatingSystem:Ubuntu20.04LTS.
+•CPU:Intel(R)Xeon(R)Platinum8358CPU@2.60GHzwith1TB
+DDR4ofMemory.
+•GPU:NVIDIATeslaA100SMX4with80GBofMemory.
+•Software:CUDA10.1,Python3.8.12,PyTorch1.9.1,PyTorchGeo
+metric2.0.1,NanoVectorDB0.0.4.3.

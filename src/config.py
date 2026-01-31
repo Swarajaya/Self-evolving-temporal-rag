@@ -1,0 +1,4 @@
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+TOP_K = 5
+TIME_DECAY_LAMBDA = 0.0005
+CONFIDENCE_THRESHOLD = 0.55
